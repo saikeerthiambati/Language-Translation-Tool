@@ -1,6 +1,6 @@
 # 🌐 Language Translation Tool
 
-🔗 Live Demo: language-translation-tool-speech.streamlit.app
+🔗 **Live Demo:** [language-translation-tool-speech.streamlit.app](https://language-translation-tool-speech.streamlit.app/)
 
 A multi-language translation web app built with Python and Streamlit — supporting both typed and spoken input, with audio output for translations. Built as part of the **SAM AI Technologies Internship Program** (Artificial Intelligence track — Task 2).
 
