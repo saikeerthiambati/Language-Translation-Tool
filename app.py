@@ -10,7 +10,7 @@ import base64
 st.set_page_config(page_title="Language Translator", page_icon="🌐", layout="wide")
 
 # ---------------- Background image (custom CSS) ----------------
-IMAGE_PATH = "background.png"
+IMAGE_PATH = "Background.png"
 
 
 def get_base64_of_image(path):
