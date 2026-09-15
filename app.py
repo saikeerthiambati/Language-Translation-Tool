@@ -5,6 +5,7 @@ import speech_recognition as sr
 from audio_recorder_streamlit import audio_recorder
 import io
 import base64
+import time
 
 # ---------------- Page setup ----------------
 st.set_page_config(page_title="Language Translator", page_icon="🌐", layout="wide")
