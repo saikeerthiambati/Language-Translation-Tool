@@ -82,7 +82,30 @@ languages = {
 
 # ---------------- Helper: run translation + TTS ----------------
 def translate_and_speak(text, source_code, target_code):
-    translated_text = GoogleTranslator(source=source_code, target=target_code).translate(text)
+    translated_text = None
+    max_retries = 3
+
+    for attempt in range(max_retries):
+        try:
+            translated_text = GoogleTranslator(source=source_code, target=target_code).translate(text)
+            break  # success, exit the retry loop
+        except Exception as e:
+            error_message = str(e)
+            if "too many requests" in error_message.lower() or "429" in error_message:
+                if attempt < max_retries - 1:
+                    wait_time = 2 ** attempt  # 1s, then 2s, then 4s
+                    st.warning(f"Server is busy — retrying in {wait_time}s... (attempt {attempt + 1}/{max_retries})")
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    st.error("Google Translate is rate-limiting requests right now. Please wait a minute and try again.")
+                    return
+            else:
+                st.error(f"Something went wrong: {error_message}")
+                return
+
+    if translated_text is None:
+        return
 
     st.success("Translation:")
     st.write(translated_text)
@@ -95,7 +118,6 @@ def translate_and_speak(text, source_code, target_code):
         st.audio(audio_bytes, format="audio/mp3")
     except Exception:
         st.info("Audio not available for this language.")
-
 
 # ---------------- Helper: convert recorded audio to text ----------------
 def speech_to_text(audio_bytes, lang_code):
