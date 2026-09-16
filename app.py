@@ -1,5 +1,5 @@
 import streamlit as st
-from deep_translator import GoogleTranslator
+from deep_translator import GoogleTranslator, MyMemoryTranslator
 from gtts import gTTS
 import speech_recognition as sr
 from audio_recorder_streamlit import audio_recorder
@@ -86,6 +86,7 @@ def translate_and_speak(text, source_code, target_code):
     translated_text = None
     max_retries = 3
 
+    # ---- Try Google Translate first, with retries on rate-limit ----
     for attempt in range(max_retries):
         try:
             translated_text = GoogleTranslator(source=source_code, target=target_code).translate(text)
@@ -95,18 +96,26 @@ def translate_and_speak(text, source_code, target_code):
             if "too many requests" in error_message.lower() or "429" in error_message:
                 if attempt < max_retries - 1:
                     wait_time = 2 ** attempt  # 1s, then 2s, then 4s
-                    st.warning(f"Server is busy — retrying in {wait_time}s... (attempt {attempt + 1}/{max_retries})")
+                    st.warning(f"Google Translate is busy — retrying in {wait_time}s... (attempt {attempt + 1}/{max_retries})")
                     time.sleep(wait_time)
                     continue
                 else:
-                    st.error("Google Translate is rate-limiting requests right now. Please wait a minute and try again.")
-                    return
+                    break  # give up on Google, fall through to backup translator
             else:
                 st.error(f"Something went wrong: {error_message}")
                 return
 
+    # ---- If Google failed after all retries, try MyMemory as a backup ----
     if translated_text is None:
-        return
+        st.info("Google Translate is unavailable right now — trying a backup translator...")
+        try:
+            translated_text = MyMemoryTranslator(source=source_code, target=target_code).translate(text)
+        except Exception:
+            st.error(
+                "Both translation services are currently unavailable. "
+                "Please wait a minute and try again."
+            )
+            return
 
     st.success("Translation:")
     st.write(translated_text)
