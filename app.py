@@ -110,11 +110,12 @@ def translate_and_speak(text, source_code, target_code):
         st.info("Google Translate is unavailable right now — trying a backup translator...")
         try:
             translated_text = MyMemoryTranslator(source=source_code, target=target_code).translate(text)
-        except Exception:
+        except Exception as e:
             st.error(
                 "Both translation services are currently unavailable. "
                 "Please wait a minute and try again."
             )
+            st.caption(f"Debug info: {str(e)}")
             return
 
     st.success("Translation:")
