@@ -1,5 +1,5 @@
 import streamlit as st
-from deep_translator import GoogleTranslator, MyMemoryTranslator
+from deep_translator import GoogleTranslator, MyMemoryTranslator, LibreTranslator
 from gtts import gTTS
 import speech_recognition as sr
 from audio_recorder_streamlit import audio_recorder
@@ -121,10 +121,22 @@ def translate_and_speak(text, source_code, target_code):
             mm_source = mymemory_lang_map.get(source_code, source_code)
             mm_target = mymemory_lang_map.get(target_code, target_code)
             translated_text = MyMemoryTranslator(source=mm_source, target=mm_target).translate(text)
+        except Exception:
+            translated_text = None  # fall through to the next backup
+
+    # ---- If MyMemory also failed, try LibreTranslate as a final backup ----
+    if translated_text is None:
+        st.info("Trying one more backup translator...")
+        try:
+            translated_text = LibreTranslator(
+                source=source_code,
+                target=target_code,
+                base_url="https://translate.astian.org",
+            ).translate(text)
         except Exception as e:
             st.error(
-                "Both translation services are currently unavailable. "
-                "Please wait a minute and try again."
+                "All translation services are currently unavailable (this is usually "
+                "a temporary rate limit, not a bug). Please wait a few minutes and try again."
             )
             st.caption(f"Debug info: {str(e)}")
             return
