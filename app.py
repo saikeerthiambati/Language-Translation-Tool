@@ -81,6 +81,15 @@ languages = {
     "Chinese (Simplified)": "zh-CN",
 }
 
+# MyMemory needs locale-style codes (e.g. hi-IN) instead of plain codes (hi)
+mymemory_lang_map = {
+    "en": "en-US", "hi": "hi-IN", "te": "te-IN", "ta": "ta-IN",
+    "kn": "kn-IN", "ml": "ml-IN", "mr": "mr-IN", "bn": "bn-IN",
+    "gu": "gu-IN", "pa": "pa-IN", "ur": "ur-PK", "or": "or-IN",
+    "as": "as-IN", "sa": "sa-IN", "ne": "ne-NP", "es": "es-ES",
+    "fr": "fr-FR", "de": "de-DE", "ja": "ja-JP", "zh-CN": "zh-CN",
+}
+
 # ---------------- Helper: run translation + TTS ----------------
 def translate_and_speak(text, source_code, target_code):
     translated_text = None
@@ -109,7 +118,9 @@ def translate_and_speak(text, source_code, target_code):
     if translated_text is None:
         st.info("Google Translate is unavailable right now — trying a backup translator...")
         try:
-            translated_text = MyMemoryTranslator(source=source_code, target=target_code).translate(text)
+            mm_source = mymemory_lang_map.get(source_code, source_code)
+            mm_target = mymemory_lang_map.get(target_code, target_code)
+            translated_text = MyMemoryTranslator(source=mm_source, target=mm_target).translate(text)
         except Exception as e:
             st.error(
                 "Both translation services are currently unavailable. "
