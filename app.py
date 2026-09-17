@@ -10,7 +10,7 @@ import time
 # ---------------- Page setup ----------------
 st.set_page_config(page_title="Language Translator", page_icon="🌐", layout="wide")
 
-# ---------------- Background image (custom CSS) ----------------
+# ---------------- Background image (local file, base64-encoded) ----------------
 IMAGE_PATH = "Background.png"
 
 
@@ -55,7 +55,7 @@ st.markdown(page_bg, unsafe_allow_html=True)
 st.title("🌐 Language Translation Tool")
 st.write("Type or speak text, choose a language, and get an instant translation — with audio output!")
 
-# ---------------- Language options ----------------
+# ---------------- Language options (code used by Google Translate & speech recognition) ----------------
 languages = {
     "English": "en",
     "Hindi": "hi",
@@ -90,7 +90,17 @@ mymemory_lang_map = {
     "fr": "fr-FR", "de": "de-DE", "ja": "ja-JP", "zh-CN": "zh-CN",
 }
 
-# ---------------- Helper: run translation + TTS ----------------
+# Google Speech Recognition needs BCP-47 style codes too
+recognition_lang_map = {
+    "en": "en-US", "hi": "hi-IN", "te": "te-IN", "ta": "ta-IN",
+    "kn": "kn-IN", "ml": "ml-IN", "mr": "mr-IN", "bn": "bn-IN",
+    "gu": "gu-IN", "pa": "pa-IN", "ur": "ur-IN", "or": "or-IN",
+    "as": "as-IN", "ne": "ne-NP", "es": "es-ES", "fr": "fr-FR",
+    "de": "de-DE", "ja": "ja-JP", "zh-CN": "zh-CN",
+}
+
+
+# ---------------- Helper: translate with automatic fallback ----------------
 def translate_and_speak(text, source_code, target_code):
     translated_text = None
     max_retries = 3
@@ -99,17 +109,17 @@ def translate_and_speak(text, source_code, target_code):
     for attempt in range(max_retries):
         try:
             translated_text = GoogleTranslator(source=source_code, target=target_code).translate(text)
-            break  # success, exit the retry loop
+            break  # success
         except Exception as e:
             error_message = str(e)
             if "too many requests" in error_message.lower() or "429" in error_message:
                 if attempt < max_retries - 1:
-                    wait_time = 2 ** attempt  # 1s, then 2s, then 4s
+                    wait_time = 2 ** attempt  # 1s, 2s, 4s
                     st.warning(f"Google Translate is busy — retrying in {wait_time}s... (attempt {attempt + 1}/{max_retries})")
                     time.sleep(wait_time)
                     continue
                 else:
-                    break  # give up on Google, fall through to backup translator
+                    break  # give up on Google, fall through to the backup translator
             else:
                 st.error(f"Something went wrong: {error_message}")
                 return
@@ -133,6 +143,7 @@ def translate_and_speak(text, source_code, target_code):
     st.success("Translation:")
     st.write(translated_text)
 
+    # ---- Text-to-Speech for the translated result ----
     try:
         tts = gTTS(text=translated_text, lang=target_code)
         audio_bytes = io.BytesIO()
@@ -142,7 +153,8 @@ def translate_and_speak(text, source_code, target_code):
     except Exception:
         st.info("Audio not available for this language.")
 
-# ---------------- Helper: convert recorded audio to text ----------------
+
+# ---------------- Helper: convert recorded speech to text ----------------
 def speech_to_text(audio_bytes, lang_code):
     recognizer = sr.Recognizer()
     audio_file = io.BytesIO(audio_bytes)
@@ -150,16 +162,7 @@ def speech_to_text(audio_bytes, lang_code):
     with sr.AudioFile(audio_file) as source:
         audio_data = recognizer.record(source)
 
-    # Google Speech Recognition needs BCP-47 style codes (e.g. en-US, te-IN)
-    recognition_lang_map = {
-        "en": "en-US", "hi": "hi-IN", "te": "te-IN", "ta": "ta-IN",
-        "kn": "kn-IN", "ml": "ml-IN", "mr": "mr-IN", "bn": "bn-IN",
-        "gu": "gu-IN", "pa": "pa-IN", "ur": "ur-IN", "or": "or-IN",
-        "as": "as-IN", "ne": "ne-NP", "es": "es-ES", "fr": "fr-FR",
-        "de": "de-DE", "ja": "ja-JP", "zh-CN": "zh-CN",
-    }
     recog_lang = recognition_lang_map.get(lang_code, "en-US")
-
     return recognizer.recognize_google(audio_data, language=recog_lang)
 
 
@@ -175,7 +178,7 @@ target_code = languages[target_lang]
 
 st.divider()
 
-# ---------------- Mode 1: Text input (Text-to-Text / Text-to-Speech) ----------------
+# ---------------- Mode 1: Type to Translate (Text-to-Text / Text-to-Speech) ----------------
 st.subheader("⌨️ Type to Translate")
 input_text = st.text_area("Enter text to translate:", height=120)
 
@@ -183,14 +186,11 @@ if st.button("Translate Text"):
     if input_text.strip() == "":
         st.warning("Please enter some text to translate.")
     else:
-        try:
-            translate_and_speak(input_text, source_code, target_code)
-        except Exception as e:
-            st.error(f"Something went wrong: {e}")
+        translate_and_speak(input_text, source_code, target_code)
 
 st.divider()
 
-# ---------------- Mode 2: Speech input (Speech-to-Text / Speech-to-Speech) ----------------
+# ---------------- Mode 2: Speak to Translate (Speech-to-Text / Speech-to-Speech) ----------------
 st.subheader("🎙️ Speak to Translate")
 st.caption(f"Click the mic, speak in **{source_lang}**, then click again to stop.")
 
@@ -203,10 +203,8 @@ if audio_bytes:
         try:
             with st.spinner("Converting speech to text..."):
                 recognized_text = speech_to_text(audio_bytes, source_code)
-
             st.info(f"You said: {recognized_text}")
             translate_and_speak(recognized_text, source_code, target_code)
-
         except sr.UnknownValueError:
             st.error("Sorry, couldn't understand the audio. Please try again clearly.")
         except sr.RequestError:
