@@ -1,5 +1,5 @@
 import streamlit as st
-from deep_translator import MyMemoryTranslator
+from deep_translator import MyMemoryTranslator, GoogleTranslator
 from gtts import gTTS
 from langdetect import detect
 import speech_recognition as sr
@@ -149,9 +149,11 @@ if "recorder_key_suffix" not in st.session_state:
     st.session_state.recorder_key_suffix = 0
 if "history" not in st.session_state:
     st.session_state.history = []
+if "last_result" not in st.session_state:
+    st.session_state.last_result = None
 
 
-# ---------------- Helper: translate + speak, with history & download ----------------
+# ---------------- Helper: run the translation, store it (doesn't render) ----------------
 def translate_and_speak(text, source_code, target_code, from_label, to_label):
     real_source = resolve_source_code(text, source_code)
     mm_source = mymemory_lang_map.get(real_source, real_source)
@@ -167,13 +169,61 @@ def translate_and_speak(text, source_code, target_code, from_label, to_label):
         st.caption(f"Debug info: {str(e)}")
         return
 
+    # Stored (rather than rendered right here) so the "Try Google Instead"
+    # button below can trigger a rerun without losing this result.
+    st.session_state.last_result = {
+        "original": text,
+        "translated": translated_text,
+        "source_code": real_source,
+        "target_code": target_code,
+        "mm_source": mm_source,
+        "mm_target": mm_target,
+        "from_label": from_label if from_label != DETECT_LABEL else f"{DETECT_LABEL} ({real_source})",
+        "to_label": to_label,
+        "google_alt": None,
+        "back_translation": None,
+    }
+
+    # ---- Save to recent-translations history (most recent first, max 5) ----
+    st.session_state.history.insert(0, {
+        "from": st.session_state.last_result["from_label"],
+        "to": to_label,
+        "original": text,
+        "translated": translated_text,
+    })
+    st.session_state.history = st.session_state.history[:5]
+
+
+def try_google_translate():
+    """Callback for the 'Try Google Translate Instead' button. Only ever
+    fires when the user explicitly clicks it — so Google gets at most one
+    extra call per result the user is unsure about, not one per translation."""
+    r = st.session_state.last_result
+    if not r:
+        return
+    try:
+        r["google_alt"] = GoogleTranslator(source=r["source_code"], target=r["target_code"]).translate(r["original"])
+    except Exception as e:
+        error_message = str(e)
+        if "too many requests" in error_message.lower() or "429" in error_message:
+            r["google_alt"] = "⚠️ Google Translate is rate-limited right now — try again in a bit."
+        else:
+            r["google_alt"] = f"⚠️ Google Translate unavailable: {error_message}"
+
+
+def render_last_result():
+    """Draws the current translation result: text, audio + download,
+    a back-translation sanity check, and the on-demand Google alternative."""
+    r = st.session_state.last_result
+    if not r:
+        return
+
     st.success("Translation:")
-    # st.code (instead of st.write) gives a built-in copy-to-clipboard icon.
-    st.code(translated_text, language=None)
+    st.code(r["translated"], language=None)
 
     # ---- Text-to-Speech for the translated result, with a download option ----
     try:
-        tts = gTTS(text=translated_text, lang=target_code)
+        tts = gTTS(text=r["translated"], lang=r["target_code"])
         audio_buf = io.BytesIO()
         tts.write_to_fp(audio_buf)
         audio_bytes_value = audio_buf.getvalue()
@@ -183,19 +233,27 @@ def translate_and_speak(text, source_code, target_code, from_label, to_label):
             data=audio_bytes_value,
             file_name="translation.mp3",
             mime="audio/mp3",
-            key=f"dl_{time.time()}",
+            key=f"dl_{hash(r['translated'])}",
         )
     except Exception:
         st.info("Audio not available for this language.")
 
-    # ---- Save to recent-translations history (most recent first, max 5) ----
-    st.session_state.history.insert(0, {
-        "from": from_label if from_label != DETECT_LABEL else f"{DETECT_LABEL} ({real_source})",
-        "to": to_label,
-        "original": text,
-        "translated": translated_text,
-    })
-    st.session_state.history = st.session_state.history[:5]
+    # ---- Round-trip back-translation, so mismatches are visible at a glance ----
+    if r["back_translation"] is None:
+        try:
+            r["back_translation"] = MyMemoryTranslator(
+                source=r["mm_target"], target=r["mm_source"]
+            ).translate(r["translated"])
+        except Exception:
+            r["back_translation"] = ""  # stay quiet if this check itself fails
+    if r["back_translation"]:
+        st.caption(f"🔄 Back-translation check (should roughly match what you entered): \"{r['back_translation']}\"")
+        st.caption("If that doesn't look close to your original text, the translation above may be off — try Google below.")
+
+    # ---- On-demand Google Translate alternative ----
+    st.button("🇬 Try Google Translate Instead", on_click=try_google_translate, key="try_google_btn")
+    if r["google_alt"]:
+        st.info(f"Google Translate says: {r['google_alt']}")
 
 
 # ---------------- Helper: convert recorded speech to text ----------------
@@ -218,6 +276,7 @@ def clear_form():
     st.session_state.input_text_area = ""
     st.session_state.batch_text_area = ""
     st.session_state.recorder_key_suffix += 1
+    st.session_state.last_result = None
 
 
 def swap_languages():
@@ -317,6 +376,11 @@ if audio_bytes:
             st.error(f"Something went wrong: {e}")
 
 st.divider()
+
+# ---------------- Result of the most recent translation (text or speech) ----------------
+render_last_result()
+if st.session_state.last_result:
+    st.divider()
 
 # ---------------- Mode 3: Batch Translate (multiple lines at once) ----------------
 st.subheader("📋 Batch Translate")
