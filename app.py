@@ -1,12 +1,11 @@
 import streamlit as st
-from deep_translator import GoogleTranslator, MyMemoryTranslator
+from deep_translator import MyMemoryTranslator
 from gtts import gTTS
 import speech_recognition as sr
 from audio_recorder_streamlit import audio_recorder
 import io
 import os
 import base64
-import time
 
 # ---------------- Page setup ----------------
 st.set_page_config(page_title="Language Translator", page_icon="🌐", layout="wide")
@@ -126,43 +125,22 @@ recognition_lang_map = {
 
 # ---------------- Helper: translate with automatic fallback ----------------
 def translate_and_speak(text, source_code, target_code):
-    translated_text = None
-    max_retries = 3
+    # MyMemory only — Google Translate (via deep_translator's unofficial
+    # scraping) kept hitting 429 rate limits on every call when deployed,
+    # since Streamlit Community Cloud shares outbound IPs across many apps.
+    # MyMemory is a real, supported API and doesn't have that problem.
+    mm_source = mymemory_lang_map.get(source_code, source_code)
+    mm_target = mymemory_lang_map.get(target_code, target_code)
 
-    # ---- Try Google Translate first, with retries on rate-limit ----
-    for attempt in range(max_retries):
-        try:
-            translated_text = GoogleTranslator(source=source_code, target=target_code).translate(text)
-            break  # success
-        except Exception as e:
-            error_message = str(e)
-            if "too many requests" in error_message.lower() or "429" in error_message:
-                if attempt < max_retries - 1:
-                    wait_time = 2 ** attempt  # 1s, 2s, 4s
-                    st.warning(f"Google Translate is busy — retrying in {wait_time}s... (attempt {attempt + 1}/{max_retries})")
-                    time.sleep(wait_time)
-                    continue
-                else:
-                    break  # give up on Google, fall through to the backup translator
-            else:
-                st.error(f"Something went wrong: {error_message}")
-                return
-
-    # ---- If Google failed after all retries, try MyMemory as a backup ----
-    if translated_text is None:
-        st.info("Google Translate is unavailable right now — trying a backup translator...")
-        try:
-            mm_source = mymemory_lang_map.get(source_code, source_code)
-            mm_target = mymemory_lang_map.get(target_code, target_code)
-            translated_text = MyMemoryTranslator(source=mm_source, target=mm_target).translate(text)
-        except Exception as e:
-            st.error(
-                "Translation services are temporarily rate-limited (this happens on shared "
-                "cloud hosting during high traffic — it isn't a bug). Please wait a few "
-                "minutes and try again."
-            )
-            st.caption(f"Debug info: {str(e)}")
-            return
+    try:
+        translated_text = MyMemoryTranslator(source=mm_source, target=mm_target).translate(text)
+    except Exception as e:
+        st.error(
+            "Translation failed — the translation service may be temporarily "
+            "unavailable, or this language pair may not be supported. Please try again."
+        )
+        st.caption(f"Debug info: {str(e)}")
+        return
 
     st.success("Translation:")
     st.write(translated_text)
