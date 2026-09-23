@@ -1,11 +1,13 @@
 import streamlit as st
 from deep_translator import MyMemoryTranslator
 from gtts import gTTS
+from langdetect import detect
 import speech_recognition as sr
 from audio_recorder_streamlit import audio_recorder
 import io
 import os
 import base64
+import time
 
 # ---------------- Page setup ----------------
 st.set_page_config(page_title="Language Translator", page_icon="🌐", layout="wide")
@@ -66,7 +68,7 @@ st.markdown(page_bg, unsafe_allow_html=True)
 st.title("🌐 Language Translation Tool")
 st.write("Type or speak text, choose a language, and get an instant translation — with audio output!")
 
-# ---------------- Language options (code used by Google Translate & speech recognition) ----------------
+# ---------------- Language options (code used by translation & speech recognition) ----------------
 languages = {
     "English": "en",
     "Hindi": "hi",
@@ -93,10 +95,6 @@ languages = {
 }
 
 # MyMemory needs locale-style codes (e.g. hi-IN) instead of plain codes (hi)
-# NOTE: previously missing "gom" (Konkani) and "sd" (Sindhi) — when Google
-# Translate failed and the app fell back to MyMemory for those two
-# languages, .get(code, code) silently passed the bare code through, which
-# MyMemory's API generally rejects, so the fallback failed too.
 mymemory_lang_map = {
     "en": "en-US", "hi": "hi-IN", "te": "te-IN", "ta": "ta-IN",
     "kn": "kn-IN", "ml": "ml-IN", "mr": "mr-IN", "bn": "bn-IN",
@@ -107,9 +105,6 @@ mymemory_lang_map = {
 }
 
 # Google Speech Recognition needs BCP-47 style codes too
-# NOTE: previously missing "sa" (Sanskrit), "gom" (Konkani), "sd" (Sindhi) —
-# picking one of those as the *spoken* source language silently fell back
-# to en-US recognition, which just produces garbage for non-English speech.
 recognition_lang_map = {
     "en": "en-US", "hi": "hi-IN", "te": "te-IN", "ta": "ta-IN",
     "kn": "kn-IN", "ml": "ml-IN", "mr": "mr-IN", "bn": "bn-IN",
@@ -122,14 +117,44 @@ recognition_lang_map = {
 # Sanskrit, Konkani, or Sindhi, so recognition will still fail for those —
 # that's a real service limitation, not a bug in this file.
 
+# ---------------- Auto-detect support ----------------
+# langdetect runs fully offline (no API calls, no extra rate limits) and
+# covers most — not all — of the languages above. Unsupported ones (Odia,
+# Assamese, Konkani, Sindhi, Sanskrit) fall back to English.
+DETECT_LABEL = "🔍 Detect Language"
+FROM_OPTIONS = [DETECT_LABEL] + list(languages.keys())
+_detect_reverse_lookup = {code.lower(): code for code in languages.values()}
 
-# ---------------- Helper: translate with automatic fallback ----------------
-def translate_and_speak(text, source_code, target_code):
-    # MyMemory only — Google Translate (via deep_translator's unofficial
-    # scraping) kept hitting 429 rate limits on every call when deployed,
-    # since Streamlit Community Cloud shares outbound IPs across many apps.
-    # MyMemory is a real, supported API and doesn't have that problem.
-    mm_source = mymemory_lang_map.get(source_code, source_code)
+
+def resolve_source_code(text, code):
+    """Turn the special 'auto' source code into a real language code by
+    guessing from the text. Returns the code unchanged if it isn't 'auto'."""
+    if code != "auto":
+        return code
+    if not text or not text.strip():
+        return "en"
+    try:
+        guess = detect(text).lower()
+    except Exception:
+        return "en"
+    detected_code = _detect_reverse_lookup.get(guess)
+    if detected_code:
+        return detected_code
+    st.info(f"Couldn't confidently detect a supported language (guessed '{guess}') — defaulting to English.")
+    return "en"
+
+
+# ---------------- Session state defaults ----------------
+if "recorder_key_suffix" not in st.session_state:
+    st.session_state.recorder_key_suffix = 0
+if "history" not in st.session_state:
+    st.session_state.history = []
+
+
+# ---------------- Helper: translate + speak, with history & download ----------------
+def translate_and_speak(text, source_code, target_code, from_label, to_label):
+    real_source = resolve_source_code(text, source_code)
+    mm_source = mymemory_lang_map.get(real_source, real_source)
     mm_target = mymemory_lang_map.get(target_code, target_code)
 
     try:
@@ -143,17 +168,34 @@ def translate_and_speak(text, source_code, target_code):
         return
 
     st.success("Translation:")
-    st.write(translated_text)
+    # st.code (instead of st.write) gives a built-in copy-to-clipboard icon.
+    st.code(translated_text, language=None)
 
-    # ---- Text-to-Speech for the translated result ----
+    # ---- Text-to-Speech for the translated result, with a download option ----
     try:
         tts = gTTS(text=translated_text, lang=target_code)
-        audio_bytes = io.BytesIO()
-        tts.write_to_fp(audio_bytes)
-        audio_bytes.seek(0)
-        st.audio(audio_bytes, format="audio/mp3")
+        audio_buf = io.BytesIO()
+        tts.write_to_fp(audio_buf)
+        audio_bytes_value = audio_buf.getvalue()
+        st.audio(audio_bytes_value, format="audio/mp3")
+        st.download_button(
+            "⬇️ Download Translation Audio",
+            data=audio_bytes_value,
+            file_name="translation.mp3",
+            mime="audio/mp3",
+            key=f"dl_{time.time()}",
+        )
     except Exception:
         st.info("Audio not available for this language.")
+
+    # ---- Save to recent-translations history (most recent first, max 5) ----
+    st.session_state.history.insert(0, {
+        "from": from_label if from_label != DETECT_LABEL else f"{DETECT_LABEL} ({real_source})",
+        "to": to_label,
+        "original": text,
+        "translated": translated_text,
+    })
+    st.session_state.history = st.session_state.history[:5]
 
 
 # ---------------- Helper: convert recorded speech to text ----------------
@@ -168,35 +210,94 @@ def speech_to_text(audio_bytes, lang_code):
     return recognizer.recognize_google(audio_data, language=recog_lang)
 
 
-# ---------------- Language selection (shared by both modes) ----------------
-col1, col2 = st.columns(2)
-with col1:
-    source_lang = st.selectbox("From:", list(languages.keys()), index=0)
-with col2:
-    target_lang = st.selectbox("To:", list(languages.keys()), index=1)
+def clear_form():
+    """Reset every input widget back to its default, and swap the audio
+    recorder's key so it drops any previously recorded clip."""
+    st.session_state.source_lang_select = FROM_OPTIONS[1]  # "English"
+    st.session_state.target_lang_select = list(languages.keys())[1]  # "Hindi"
+    st.session_state.input_text_area = ""
+    st.session_state.batch_text_area = ""
+    st.session_state.recorder_key_suffix += 1
 
-source_code = languages[source_lang]
+
+def swap_languages():
+    """Swap From/To. Blocked when From is set to auto-detect, since the
+    To dropdown has no 'detect' option to swap into."""
+    src = st.session_state.source_lang_select
+    tgt = st.session_state.target_lang_select
+    if src == DETECT_LABEL:
+        st.session_state._swap_blocked = True
+        return
+    st.session_state.source_lang_select = tgt
+    st.session_state.target_lang_select = src
+
+
+# ---------------- Language selection (shared by all modes) ----------------
+col1, col2, col3 = st.columns([5, 1, 5])
+with col1:
+    source_lang = st.selectbox("From:", FROM_OPTIONS, index=1, key="source_lang_select")
+with col2:
+    st.markdown("<div style='margin-top: 1.8rem;'></div>", unsafe_allow_html=True)
+    st.button("⇄", on_click=swap_languages, help="Swap From/To languages", use_container_width=True)
+with col3:
+    target_lang = st.selectbox("To:", list(languages.keys()), index=1, key="target_lang_select")
+
+if st.session_state.pop("_swap_blocked", False):
+    st.warning("Pick a specific 'From' language (not Detect Language) before swapping.")
+
+source_code = "auto" if source_lang == DETECT_LABEL else languages[source_lang]
 target_code = languages[target_lang]
 
 st.divider()
 
 # ---------------- Mode 1: Type to Translate (Text-to-Text / Text-to-Speech) ----------------
 st.subheader("⌨️ Type to Translate")
-input_text = st.text_area("Enter text to translate:", height=120)
+input_text = st.text_area("Enter text to translate:", height=120, key="input_text_area")
 
-if st.button("Translate Text"):
+char_count = len(input_text)
+word_count = len(input_text.split())
+st.caption(f"{char_count} characters · {word_count} words (free translation quota is limited — keep an eye on usage)")
+
+btn_col1, btn_col2 = st.columns(2)
+with btn_col1:
+    translate_clicked = st.button("Translate Text", use_container_width=True)
+with btn_col2:
+    play_original_clicked = st.button("🔊 Play Original Text", use_container_width=True, disabled=not input_text.strip())
+
+if translate_clicked:
     if input_text.strip() == "":
         st.warning("Please enter some text to translate.")
     else:
-        translate_and_speak(input_text, source_code, target_code)
+        with st.spinner("Translating..."):
+            translate_and_speak(input_text, source_code, target_code, source_lang, target_lang)
+
+if play_original_clicked and input_text.strip():
+    real_code = resolve_source_code(input_text, source_code)
+    try:
+        tts = gTTS(text=input_text, lang=real_code)
+        buf = io.BytesIO()
+        tts.write_to_fp(buf)
+        buf.seek(0)
+        st.audio(buf, format="audio/mp3")
+    except Exception:
+        st.info("Audio not available for this language.")
 
 st.divider()
 
 # ---------------- Mode 2: Speak to Translate (Speech-to-Text / Speech-to-Speech) ----------------
 st.subheader("🎙️ Speak to Translate")
-st.caption(f"Click the mic, speak in **{source_lang}**, then click again to stop.")
+if source_lang == DETECT_LABEL:
+    st.caption("Click the mic and speak. (Auto-detect isn't supported for speech recognition itself, "
+               "so it'll be recognized as English, then the translation source language will be "
+               "detected from the recognized text.)")
+else:
+    st.caption(f"Click the mic, speak in **{source_lang}**, then click again to stop.")
 
-audio_bytes = audio_recorder(pause_threshold=2.0, sample_rate=16000)
+audio_bytes = audio_recorder(
+    pause_threshold=2.0,
+    sample_rate=16000,
+    key=f"recorder_{st.session_state.recorder_key_suffix}",
+)
 
 if audio_bytes:
     st.audio(audio_bytes, format="audio/wav")
@@ -206,10 +307,59 @@ if audio_bytes:
             with st.spinner("Converting speech to text..."):
                 recognized_text = speech_to_text(audio_bytes, source_code)
             st.info(f"You said: {recognized_text}")
-            translate_and_speak(recognized_text, source_code, target_code)
+            with st.spinner("Translating..."):
+                translate_and_speak(recognized_text, source_code, target_code, source_lang, target_lang)
         except sr.UnknownValueError:
             st.error("Sorry, couldn't understand the audio. Please try again clearly.")
         except sr.RequestError:
             st.error("Speech recognition service is unavailable right now.")
         except Exception as e:
             st.error(f"Something went wrong: {e}")
+
+st.divider()
+
+# ---------------- Mode 3: Batch Translate (multiple lines at once) ----------------
+st.subheader("📋 Batch Translate")
+st.caption("One phrase per line — each line is translated separately using the From/To languages above.")
+batch_text = st.text_area("Enter multiple lines:", height=120, key="batch_text_area")
+
+if st.button("Translate All Lines"):
+    lines = [line.strip() for line in batch_text.split("\n") if line.strip()]
+    if not lines:
+        st.warning("Enter at least one line.")
+    else:
+        results = []
+        progress = st.progress(0.0)
+        for i, line in enumerate(lines):
+            real_source = resolve_source_code(line, source_code)
+            mm_source = mymemory_lang_map.get(real_source, real_source)
+            mm_target = mymemory_lang_map.get(target_code, target_code)
+            try:
+                translated_line = MyMemoryTranslator(source=mm_source, target=mm_target).translate(line)
+            except Exception as e:
+                translated_line = f"⚠️ Failed: {e}"
+            results.append({"Original": line, "Translated": translated_line})
+            progress.progress((i + 1) / len(lines))
+            time.sleep(0.3)  # small pause so rapid-fire calls don't trip the free API's rate limit
+        st.dataframe(results, use_container_width=True, hide_index=True)
+
+st.divider()
+
+# ---------------- Recent Translations ----------------
+with st.expander(f"🕘 Recent Translations ({len(st.session_state.history)})"):
+    if not st.session_state.history:
+        st.caption("No translations yet — your last 5 will show up here.")
+    else:
+        for item in st.session_state.history:
+            st.markdown(f"**{item['from']} → {item['to']}**")
+            st.write(f"📝 {item['original']}")
+            st.write(f"➡️ {item['translated']}")
+            st.markdown("---")
+        if st.button("🗑️ Clear History"):
+            st.session_state.history = []
+            st.rerun()
+
+st.divider()
+
+# ---------------- Clear everything ----------------
+st.button("🔄 Clear Form", on_click=clear_form, use_container_width=True)

@@ -4,3 +4,4 @@ gtts
 SpeechRecognition
 audio-recorder-streamlit
 pydub
+langdetect
