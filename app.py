@@ -4,6 +4,7 @@ from gtts import gTTS
 import speech_recognition as sr
 from audio_recorder_streamlit import audio_recorder
 import io
+import os
 import base64
 import time
 
@@ -11,23 +12,34 @@ import time
 st.set_page_config(page_title="Language Translator", page_icon="🌐", layout="wide")
 
 # ---------------- Background image (local file, base64-encoded) ----------------
-IMAGE_PATH = "Background.png"
+# Resolve relative to this script's own folder, not the process's working
+# directory — this is what breaks the background on some hosts/deployments.
+IMAGE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Background.png")
 
 
+@st.cache_data
 def get_base64_of_image(path):
     with open(path, "rb") as img_file:
         return base64.b64encode(img_file.read()).decode()
 
 
-img_base64 = get_base64_of_image(IMAGE_PATH)
-
-page_bg = f"""
-<style>
-[data-testid="stAppViewContainer"] {{
+# Don't let a missing/unreadable image take down the whole app.
+try:
+    img_base64 = get_base64_of_image(IMAGE_PATH)
+    bg_css = f"""
     background-image: url("data:image/png;base64,{img_base64}");
     background-size: cover;
     background-position: center;
     background-attachment: fixed;
+    """
+except FileNotFoundError:
+    st.warning("Background.png not found — continuing without the background image.")
+    bg_css = ""
+
+page_bg = f"""
+<style>
+[data-testid="stAppViewContainer"] {{
+    {bg_css}
 }}
 
 [data-testid="stHeader"] {{
@@ -82,22 +94,34 @@ languages = {
 }
 
 # MyMemory needs locale-style codes (e.g. hi-IN) instead of plain codes (hi)
+# NOTE: previously missing "gom" (Konkani) and "sd" (Sindhi) — when Google
+# Translate failed and the app fell back to MyMemory for those two
+# languages, .get(code, code) silently passed the bare code through, which
+# MyMemory's API generally rejects, so the fallback failed too.
 mymemory_lang_map = {
     "en": "en-US", "hi": "hi-IN", "te": "te-IN", "ta": "ta-IN",
     "kn": "kn-IN", "ml": "ml-IN", "mr": "mr-IN", "bn": "bn-IN",
     "gu": "gu-IN", "pa": "pa-IN", "ur": "ur-PK", "or": "or-IN",
     "as": "as-IN", "sa": "sa-IN", "ne": "ne-NP", "es": "es-ES",
     "fr": "fr-FR", "de": "de-DE", "ja": "ja-JP", "zh-CN": "zh-CN",
+    "gom": "gom-IN", "sd": "sd-PK",
 }
 
 # Google Speech Recognition needs BCP-47 style codes too
+# NOTE: previously missing "sa" (Sanskrit), "gom" (Konkani), "sd" (Sindhi) —
+# picking one of those as the *spoken* source language silently fell back
+# to en-US recognition, which just produces garbage for non-English speech.
 recognition_lang_map = {
     "en": "en-US", "hi": "hi-IN", "te": "te-IN", "ta": "ta-IN",
     "kn": "kn-IN", "ml": "ml-IN", "mr": "mr-IN", "bn": "bn-IN",
     "gu": "gu-IN", "pa": "pa-IN", "ur": "ur-IN", "or": "or-IN",
     "as": "as-IN", "ne": "ne-NP", "es": "es-ES", "fr": "fr-FR",
     "de": "de-DE", "ja": "ja-JP", "zh-CN": "zh-CN",
+    "sa": "sa-IN", "gom": "gom-IN", "sd": "sd-IN",
 }
+# Google's speech-recognition service doesn't actually have models for
+# Sanskrit, Konkani, or Sindhi, so recognition will still fail for those —
+# that's a real service limitation, not a bug in this file.
 
 
 # ---------------- Helper: translate with automatic fallback ----------------
